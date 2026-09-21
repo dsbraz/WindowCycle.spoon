@@ -68,4 +68,34 @@ cycle:bindHotkeys({ clockwise = { { "cmd" }, "`" } })
 assert(not old.enabled and cycle:status().bindings.clockwise, "rebinding cleans old hotkeys")
 cycle:stop()
 assert(next(cycle:status().bindings) == nil, "stop removes bindings")
+
+local right = { id = function() return 2 end,
+  fullFrame = function() return hs.geometry.rect(0, 0, 1000, 1000) end }
+screen.frame, right.frame = screen.fullFrame, right.fullFrame
+local pointerScreen = screen
+fake.screen.allScreens = function() return { right, screen } end
+fake.mouse = {
+  getCurrentScreen = function() return pointerScreen end,
+  absolutePosition = function(point) pointerScreen = point.x < 0 and screen or right end,
+}
+fake.spaces.activeSpaceOnScreen = function(s) return s:id() end
+fake.spaces.windowsForSpace = function(id) return id == 1 and { 1 } or { 20 } end
+fake.window.orderedWindows = function() return windows end
+local east = window(20, 500, 500, { screen = right })
+east.frame = function() return hs.geometry.rect(450, 450, 100, 100) end
+nw.frame = function() return hs.geometry.rect(-800, 200, 100, 100) end
+windows, focused = { nw, east }, nw
+assert(cycle:nextMonitor() and focused == east and pointerScreen == right, "next monitor focuses and moves pointer")
+assert(cycle:nextMonitor() and focused == nw and pointerScreen == screen, "monitor wraparound")
+assert(cycle:previousMonitor() and focused == east, "reverse monitor wraparound")
+windows, focused, pointerScreen = { nw }, nw, screen
+assert(cycle:nextMonitor() and focused == nw and pointerScreen == right, "empty monitor only moves pointer")
+assert(cycle:nextMonitor() and pointerScreen == screen, "continue from empty monitor")
+fake.screen.allScreens = function() return { screen } end
+assert(not cycle:nextMonitor(), "single monitor is a no-op")
+cycle:bindHotkeys({ nextMonitor = { { "alt" }, "`" }, previousMonitor = { { "alt", "shift" }, "`" } })
+assert(cycle:status().bindings.nextMonitor and cycle:status().bindings.previousMonitor, "monitor bindings registered")
+local monitorKey = cycle._hotkeys.nextMonitor
+cycle:stop()
+assert(not monitorKey.enabled and next(cycle:status().bindings) == nil, "monitor bindings cleaned up")
 print("WindowCycle: all isolated behavior tests passed")

@@ -2,7 +2,7 @@ local obj = {}
 obj.__index = obj
 
 obj.name = "WindowCycle"
-obj.version = "0.1.0"
+obj.version = "0.2.0"
 obj.author = "Daniel Braz"
 obj.license = "MIT"
 
@@ -107,9 +107,71 @@ function obj:counterclockwise()
   return self:_cycle(-1)
 end
 
+-- Keep an empty destination in the cycle even though no window can take focus.
+function obj:_cycleMonitor(step)
+  local screens = hs.screen.allScreens()
+  if #screens < 2 then return false end
+  table.sort(screens, function(a, b)
+    local af, bf = a:fullFrame(), b:fullFrame()
+    if af.x ~= bf.x then return af.x < bf.x end
+    if af.y ~= bf.y then return af.y < bf.y end
+    return a:id() < b:id()
+  end)
+
+  local focused = hs.window.focusedWindow()
+  local focusedID = focused and focused:id()
+  local pointerScreen = hs.mouse.getCurrentScreen()
+  local current = focused and focused:screen() or pointerScreen
+  if self._emptyScreen and focusedID == self._previousFocusID
+    and pointerScreen and pointerScreen:id() == self._emptyScreen then
+    current = pointerScreen
+  end
+  local index = 1
+  for i, screen in ipairs(screens) do
+    if current and screen:id() == current:id() then index = i; break end
+  end
+  local destination = screens[(index - 1 + step) % #screens + 1]
+  local space = hs.spaces.activeSpaceOnScreen(destination)
+  local ids = space and hs.spaces.windowsForSpace(space)
+  if not ids then return false end
+  local inSpace = {}
+  for _, id in ipairs(ids) do inSpace[id] = true end
+
+  local target
+  for _, window in ipairs(hs.window.orderedWindows()) do
+    local ok, eligible = pcall(function()
+      local screen, app = window:screen(), window:application()
+      return inSpace[window:id()] and window:isStandard()
+        and window:isVisible() and not window:isMinimized()
+        and screen and screen:id() == destination:id()
+        and app and not self.excludedApps[app:bundleID()]
+    end)
+    if ok and eligible then target = window; break end
+  end
+
+  local frame = destination:frame()
+  if target then
+    target:focus()
+    -- Place the pointer within the part of the window on this monitor.
+    frame = target:frame():intersect(frame)
+  end
+  hs.mouse.absolutePosition({ x = frame.x + frame.w / 2, y = frame.y + frame.h / 2 })
+  self._emptyScreen = not target and destination:id() or nil
+  self._previousFocusID = focusedID
+  return true
+end
+
+function obj:nextMonitor()
+  return self:_cycleMonitor(1)
+end
+
+function obj:previousMonitor()
+  return self:_cycleMonitor(-1)
+end
+
 function obj:bindHotkeys(mapping)
   self:stop()
-  for _, action in ipairs({ "clockwise", "counterclockwise" }) do
+  for _, action in ipairs({ "clockwise", "counterclockwise", "nextMonitor", "previousMonitor" }) do
     local binding = mapping[action]
     if binding then
       local hotkey = hs.hotkey.bind(binding[1], binding[2], function() self[action](self) end)
@@ -122,6 +184,7 @@ end
 function obj:stop()
   for _, hotkey in pairs(self._hotkeys) do hotkey:delete() end
   self._hotkeys = {}
+  self._emptyScreen, self._previousFocusID = nil, nil
   return self
 end
 
